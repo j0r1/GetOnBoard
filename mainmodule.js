@@ -86,59 +86,77 @@ function rescale(data, w, h, targetWH)
     return new Pixels(targetWH, targetWH, imgDat.data);
 }
 
-function processBoardParts(p, x0, x1, y0, y1, targetWH=32)
+async function processBoardParts(p, x0, x1, y0, y1, targetWH=32)
 {
-    const modelUrl = new URL('jsmodel/model.json', import.meta.url);
-    console.log(modelUrl);
-    tf.loadLayersModel("" + modelUrl).then((model) => 
+    const modelLocalStorage = 'indexeddb://piecedetecttionmodel';
+    const modelUrl = "" + (new URL('jsmodel/model.json', import.meta.url));
+    let model = null;
+    let modelOrigin = null;
+
+    for (const [ m, origin ]  of [ [ modelLocalStorage, 'localstorage'], 
+                                   [ modelUrl, 'website' ] ])
     {
-        console.log("Model loaded!");
-
-        const dx = (x1-x0)/8;
-        const dy = (y1-y0)/8;
-        // const board = new Pixels(... p.getRGBA(x0, y0, x1-x0, y1-y0));
-        // board.showInNewTab("Board part");
-
-        const fetchBoardPiece = (X, Y) => {
-
-            const left = Math.floor(x0 + X*dx);
-            const right = Math.floor(x0 + (X+1)*dx);
-            const top = Math.floor(y0 + Y*dy);
-            const bottom = Math.floor(y0 + (Y+1)*dy);
-            const w = right-left;
-            const h = bottom-top;
-
-            return rescale(p.getRGBAGray(left, top, w, h)[2], w, h, targetWH);
+        try {
+            model = await tf.loadLayersModel(m);
+            modelOrigin = origin;
+            break;
+        } catch (e) {
+            console.warn("Temporary error: " + e);
         }
+    }
 
-        let pieceImages = [];
-        const colName = [ 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']
+    if (!model)
+        throw "No model could be loaded";
+    
+    console.log(`Model loaded from ${modelOrigin}!`);
+    if (modelOrigin !== 'localstorage')
+    {
+        console.log("Saving model to local storage");
+        await model.save(modelLocalStorage);
+    }
 
-        let fen = "";
-        for (let Y = 0 ; Y < 8 ; Y++)
+    const dx = (x1-x0)/8;
+    const dy = (y1-y0)/8;
+    // const board = new Pixels(... p.getRGBA(x0, y0, x1-x0, y1-y0));
+    // board.showInNewTab("Board part");
+
+    const fetchBoardPiece = (X, Y) => {
+
+        const left = Math.floor(x0 + X*dx);
+        const right = Math.floor(x0 + (X+1)*dx);
+        const top = Math.floor(y0 + Y*dy);
+        const bottom = Math.floor(y0 + (Y+1)*dy);
+        const w = right-left;
+        const h = bottom-top;
+
+        return rescale(p.getRGBAGray(left, top, w, h)[2], w, h, targetWH);
+    }
+
+    let pieceImages = [];
+    const colName = [ 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']
+
+    let fen = "";
+    for (let Y = 0 ; Y < 8 ; Y++)
+    {
+        let rank = "";
+        for (let X = 0 ; X < 8 ; X++)
         {
-            let rank = "";
-            for (let X = 0 ; X < 8 ; X++)
-            {
-                const piece = fetchBoardPiece(X, Y);
-                const [ fullName, shortName ] = analyzeOnePiece(model, piece);
-                pieceImages.push({
-                    "position": colName[X] + (8-Y),
-                    "piece": piece,
-                    "fullname": fullName,
-                    "shortname": shortName,
-                })
-                rank += shortName;
-            }
-            console.log(rank);
-            if (fen.length != 0)
-                fen += '/';
-            fen += reduceSpaces(rank);
+            const piece = fetchBoardPiece(X, Y);
+            const [ fullName, shortName ] = analyzeOnePiece(model, piece);
+            pieceImages.push({
+                "position": colName[X] + (8-Y),
+                "piece": piece,
+                "fullname": fullName,
+                "shortname": shortName,
+            })
+            rank += shortName;
         }
-        openTabForFen(fen);
-    }).catch((err) => {
-        console.error("Couldn't load model: " + err);
-    })    
+        console.log(rank);
+        if (fen.length != 0)
+            fen += '/';
+        fen += reduceSpaces(rank);
+    }
+    openTabForFen(fen);
 }
 
 class Pixels
@@ -322,7 +340,12 @@ function analyzePixels(p)
     const avgSize = (width+height)/2;
     const borderPix = Math.round(avgSize/50);
     console.log("borderPix = " + borderPix);
-    processBoardParts(p, leftX+borderPix, rightX-borderPix, topY+borderPix, bottomY-borderPix);
+    
+    processBoardParts(p, leftX+borderPix, rightX-borderPix, topY+borderPix, bottomY-borderPix).then(() => {
+        console.log("Board parts processed");
+    }).catch((err) => {
+        console.error("Error:" + err);
+    })
 }
 
 function readData()
