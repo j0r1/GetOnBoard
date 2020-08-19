@@ -25,6 +25,25 @@ for (const color of colorCategories)
         categories.push(`${color} ${piece}`)
 categories.push("empty")
 
+let dlg = null;
+const dlgTemplate = `
+<div id="statusmessage"></div>
+<canvas id="detectedboard"></canvas>
+<pre id="detectedstate">
+</pre>
+`;
+
+function status(msg)
+{
+    document.getElementById("statusmessage").textContent = `${msg}`;
+}
+
+function boardStateLine(l)
+{
+    document.getElementById("detectedstate").innerHTML += `${l}
+`;
+}
+
 function openTabForFen(fen)
 {
     const url = "https://lichess.org/editor/" + fen;
@@ -54,14 +73,15 @@ function reduceSpaces(rank)
     return fen;
 }
 
-function analyzeOnePiece(model, piece)
+async function analyzeOnePiece(model, piece)
 {
     const divider = tf.tensor([255]).asType('float32');
     const pix = tf.browser.fromPixels(piece.getImageData(), 1).asType('float32').div(divider);
     const input = pix.as4D(1, ...pix.shape);
     const output = model.predict(input);
     const classes = output.as1D(output.shape[1]);
-    const bestClass = tf.argMax(classes).bufferSync().get(0);
+    const buf = await tf.argMax(classes).buffer();
+    const bestClass = buf.get(0);
     // console.log(classes + " -> best: " + bestClass + " = " + categories[bestClass]);
 
     const className = categories[bestClass];
@@ -96,6 +116,7 @@ async function processBoardParts(p, x0, x1, y0, y1, targetWH=32)
     for (const [ m, origin ]  of [ [ modelLocalStorage, 'localstorage'], 
                                    [ modelUrl, 'website' ] ])
     {
+        status("Trying to load neural net from " + origin);
         try {
             model = await tf.loadLayersModel(m);
             modelOrigin = origin;
@@ -117,7 +138,15 @@ async function processBoardParts(p, x0, x1, y0, y1, targetWH=32)
 
     const dx = (x1-x0)/8;
     const dy = (y1-y0)/8;
-    // const board = new Pixels(... p.getRGBA(x0, y0, x1-x0, y1-y0));
+    const board = new Pixels(... p.getRGBA(x0, y0, x1-x0, y1-y0));
+    const cnvs = document.getElementById("detectedboard");
+    cnvs.width = board.getWidth();
+    cnvs.height = board.getHeight();
+    const ctx = cnvs.getContext("2d");
+    ctx.putImageData(board.getImageData(), 0, 0);
+    cnvs.style.width = "150px";
+    cnvs.style.height = "150px";
+
     // board.showInNewTab("Board part");
 
     const fetchBoardPiece = (X, Y) => {
@@ -142,7 +171,7 @@ async function processBoardParts(p, x0, x1, y0, y1, targetWH=32)
         for (let X = 0 ; X < 8 ; X++)
         {
             const piece = fetchBoardPiece(X, Y);
-            const [ fullName, shortName ] = analyzeOnePiece(model, piece);
+            const [ fullName, shortName ] = await analyzeOnePiece(model, piece);
             pieceImages.push({
                 "position": colName[X] + (8-Y),
                 "piece": piece,
@@ -152,11 +181,17 @@ async function processBoardParts(p, x0, x1, y0, y1, targetWH=32)
             rank += shortName;
         }
         console.log(rank);
+        boardStateLine(`${8-Y}: ${rank}`);
         if (fen.length != 0)
             fen += '/';
         fen += reduceSpaces(rank);
     }
     openTabForFen(fen);
+    // if (dlg)
+    // {
+    //     dlg.close();
+    //     dlg = null;
+    // }
 }
 
 class Pixels
@@ -361,17 +396,72 @@ function readData()
     return [w, h, pixels];
 }
 
-function main()
+function mainVexAvailable()
 {
+    console.log("Vex available!");
+    if (dlg)
+    {
+        dlg.close();
+        dlg = null;
+    }
+
+    dlg = vex.dialog.open({
+        unsafeMessage: dlgTemplate,
+        buttons: []
+    })
+
+    status("Checking TensorFlow")
     if (!document.getElementById("tsscript"))
     {
         let script = document.createElement("script");
         script.setAttribute("id", "tsscript");
         script.src = "https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@2.0.0/dist/tf.min.js";
+        script.onload = mainTensorFlowLoaded;
         document.body.appendChild(script);
     }
+    else
+        mainTensorFlowLoaded();
+}
 
+function main()
+{
     console.log("main(module)");
+
+    if (!document.getElementById("vexstuff"))
+    {
+        const scriptLoc = import.meta.url;
+        const baseUrl = scriptLoc.substr(0, scriptLoc.lastIndexOf('/'));
+
+        let link = (fn) => {
+            let l = document.createElement("link");
+            l.setAttribute("href", `${baseUrl}/${fn}`);
+            l.setAttribute("rel", "stylesheet");
+            return l;
+        }
+
+        document.body.appendChild(link("vex.css"));
+        document.body.appendChild(link("vex-theme-os.css"));
+        let st = document.createElement("style");
+        st.innerHTML = ".vex div{ font: 2vw Arial; }";
+        document.body.appendChild(st);
+
+        let s = document.createElement("script");
+        s.setAttribute("id", "vexstuff");
+        s.src = `${baseUrl}/vex.combined.js`;
+        s.onload = () => {
+            window.vex.defaultOptions.className = 'vex-theme-os';
+            mainVexAvailable();
+        }
+        document.body.appendChild(s);
+    }
+    else
+        mainVexAvailable();
+}
+
+function mainTensorFlowLoaded()
+{
+    status("TensorFlow loaded")
+
     const cnvs = document.getElementsByTagName("canvas")[0];
     const gl = cnvs.getContext("webgl");
 
@@ -396,12 +486,16 @@ function main()
         setTimeout(() => { 
             const p = new Pixels(w, h, pixels, true);
             // p.showInNewTab("Entire board");
+            status("Analyzing detected screen");
             analyzePixels(p); 
         }, 0);
 
         gl.drawElements = gl._realDrawElements;
         delete gl._realDrawElements;
     }
+
+    // Fake resize event, triggers update
+    window.dispatchEvent(new UIEvent("resize"));
 }
 
 console.log("Main module");
