@@ -27,11 +27,38 @@ categories.push("empty")
 
 let dlg = null;
 const dlgTemplate = `
-<div id="statusmessage"></div>
-<canvas id="detectedboard"></canvas>
-<pre id="detectedstate">
+<div id="dlgcontainer">
+    <div id="detectedboarddiv" style="display:none;">
+        <div>Detected board image:</div>
+        <canvas id="detectedboard"></canvas>
+    </div>
+    <div>Status: <span id="statusmessage"></span></div>
+    <div id="detectedlayoutdiv" style="display:none;">
+        Detected board layout:
+        <pre id="detectedstate">
 </pre>
+    </div>
+    <div id="layoutfendiv"></div>
+</div>
 `;
+
+function showBoardInDialog(board)
+{
+    const cnvs = document.getElementById("detectedboard");
+    cnvs.width = board.getWidth();
+    cnvs.height = board.getHeight();
+    const ctx = cnvs.getContext("2d");
+    ctx.putImageData(board.getImageData(), 0, 0);
+    cnvs.style.width = "150px";
+    cnvs.style.height = "150px";
+
+    document.getElementById("detectedboarddiv").style.display = "";
+}
+
+function showFenInDialog(fen)
+{
+    document.getElementById("layoutfendiv").textContent = "FEN: " + fen;
+}
 
 function status(msg)
 {
@@ -40,6 +67,7 @@ function status(msg)
 
 function boardStateLine(l)
 {
+    document.getElementById("detectedlayoutdiv").style.display = "";
     document.getElementById("detectedstate").innerHTML += `${l}
 `;
 }
@@ -139,14 +167,7 @@ async function processBoardParts(p, x0, x1, y0, y1, targetWH=32)
     const dx = (x1-x0)/8;
     const dy = (y1-y0)/8;
     const board = new Pixels(... p.getRGBA(x0, y0, x1-x0, y1-y0));
-    const cnvs = document.getElementById("detectedboard");
-    cnvs.width = board.getWidth();
-    cnvs.height = board.getHeight();
-    const ctx = cnvs.getContext("2d");
-    ctx.putImageData(board.getImageData(), 0, 0);
-    cnvs.style.width = "150px";
-    cnvs.style.height = "150px";
-
+    showBoardInDialog(board);
     // board.showInNewTab("Board part");
 
     const fetchBoardPiece = (X, Y) => {
@@ -161,7 +182,6 @@ async function processBoardParts(p, x0, x1, y0, y1, targetWH=32)
         return rescale(p.getRGBAGray(left, top, w, h)[2], w, h, targetWH);
     }
 
-    let pieceImages = [];
     const colName = [ 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']
 
     let fen = "";
@@ -172,12 +192,10 @@ async function processBoardParts(p, x0, x1, y0, y1, targetWH=32)
         {
             const piece = fetchBoardPiece(X, Y);
             const [ fullName, shortName ] = await analyzeOnePiece(model, piece);
-            pieceImages.push({
-                "position": colName[X] + (8-Y),
-                "piece": piece,
-                "fullname": fullName,
-                "shortname": shortName,
-            })
+            const position = colName[X] + (8-Y);
+            if (fullName !== 'empty')
+                status(`Detected ${fullName} at ${position}`);
+            
             rank += shortName;
         }
         console.log(rank);
@@ -187,11 +205,8 @@ async function processBoardParts(p, x0, x1, y0, y1, targetWH=32)
         fen += reduceSpaces(rank);
     }
     openTabForFen(fen);
-    // if (dlg)
-    // {
-    //     dlg.close();
-    //     dlg = null;
-    // }
+    showFenInDialog(fen);
+    status("Finished");
 }
 
 class Pixels
@@ -442,7 +457,21 @@ function main()
         document.body.appendChild(link("vex.css"));
         document.body.appendChild(link("vex-theme-os.css"));
         let st = document.createElement("style");
-        st.innerHTML = ".vex div{ font: 2vw Arial; }";
+        st.innerHTML = `
+        .vex div {
+            font: 16px Arial; 
+            margin-bottom: 10px;
+        }
+
+        #dlgcontainer {
+            position: relative;
+            width: 100%;
+        }
+
+        #detectedboarddiv {
+            float: right;
+        }
+        `;
         document.body.appendChild(st);
 
         let s = document.createElement("script");
@@ -458,15 +487,41 @@ function main()
         mainVexAvailable();
 }
 
+function getCanvas()
+{
+    const elems = document.getElementsByTagName("canvas");
+    for (let e of elems)
+    {
+        return e;
+        if (e.getAttribute("id") !== "detectedboard")
+            return e;
+    }
+    throw "No canvas found";
+}
+
 function mainTensorFlowLoaded()
 {
     status("TensorFlow loaded")
+    let cnvs = null, gl = null;
 
-    const cnvs = document.getElementsByTagName("canvas")[0];
-    const gl = cnvs.getContext("webgl");
+    try {
+        cnvs = getCanvas();
+        gl = cnvs.getContext("webgl");
+        if (!gl)
+            throw "No WebGL context found";
+    } catch(err) {
+        status("Unable to get canvas/context: " + err);
+        return;
+    }
 
     if (!gl._realDrawElements)
         gl._realDrawElements = gl.drawElements;
+    
+    // Cancel if nothing found in time
+    let timerId = setTimeout(() => {
+        gl.drawElements = gl._realDrawElements;
+        status("No board found in time limit");
+    }, 3000);
 
     const neededDrawElementsCount = 3; // Entire update seems to take three updates
     gl._drawElementsCount = 0;
@@ -483,11 +538,16 @@ function mainTensorFlowLoaded()
         // console.log("w = " + w + " h = " + h + " pixels:");
         // console.log(pixels);
         
+        clearInterval(timerId);
         setTimeout(() => { 
             const p = new Pixels(w, h, pixels, true);
             // p.showInNewTab("Entire board");
-            status("Analyzing detected screen");
-            analyzePixels(p); 
+            status("Looking for board in web page")
+            try {
+                analyzePixels(p);
+            } catch(err) {
+                status("Unable to detect board: " + err);
+            }
         }, 0);
 
         gl.drawElements = gl._realDrawElements;
