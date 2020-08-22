@@ -25,12 +25,12 @@ for (const color of colorCategories)
         categories.push(`${color} ${piece}`)
 categories.push("empty")
 
-let dlg = null;
 const dlgTemplate = `
 <div id="dlgcontainer">
     <div id="detectedboarddiv" style="display:none;">
         <div>Detected board image:</div>
-        <canvas id="detectedboard"></canvas>
+        <div><canvas id="detectedboard"></canvas></div>
+        <div>#calls per update: <input id="callsperupdate" style="width: 48px;" type="number"></div>
     </div>
     <div>Status: <span id="statusmessage"></span></div>
     <div id="detectedlayoutdiv" style="display:none;">
@@ -41,6 +41,33 @@ const dlgTemplate = `
     <div id="layoutfendiv"></div>
 </div>
 `;
+
+const localStorageSettingsKey = "getonboardsettings";
+const settingsDefaults = {
+    "drawelementscallsforboard": 3
+};
+
+function getSettings()
+{
+    let settings = null;
+    if (localStorageSettingsKey in localStorage)
+    {
+        const lsSettings = JSON.parse(localStorage[localStorageSettingsKey]);
+        console.log("Local storage settings:");
+        console.log(lsSettings);
+        settings = { ...settingsDefaults, ...lsSettings };
+    }
+    else
+        settings = { ...settingsDefaults }
+    console.log("Loaded settings:")
+    console.log(settings);
+    return settings;
+}
+
+function writeSettings(settings)
+{
+    localStorage[localStorageSettingsKey] = JSON.stringify(settings);
+}
 
 function showBoardInDialog(board)
 {
@@ -414,16 +441,27 @@ function readData()
 function mainVexAvailable()
 {
     console.log("Vex available!");
-    if (dlg)
+    if (window.getOnBoardDlg)
     {
-        dlg.close();
-        dlg = null;
+        window.getOnBoardDlg.close();
+        window.getOnBoardDlg = null;
     }
 
-    dlg = vex.dialog.open({
+    window.getOnBoardDlg = vex.dialog.open({
         unsafeMessage: dlgTemplate,
-        buttons: []
+        buttons: [],
+        beforeClose: function()
+        {
+            console.log("Writing settings");
+            let settings = getSettings();
+            settings["drawelementscallsforboard"] = parseInt(document.getElementById("callsperupdate").value);
+            console.log(settings);
+            writeSettings(settings);
+            return true;
+        }
     })
+    let settings = getSettings();
+    document.getElementById("callsperupdate").value = settings["drawelementscallsforboard"];
 
     status("Checking TensorFlow")
     if (!document.getElementById("tsscript"))
@@ -523,7 +561,8 @@ function mainTensorFlowLoaded()
         status("No board found in time limit");
     }, 3000);
 
-    const neededDrawElementsCount = 3; // Entire update seems to take three updates
+    const settings = getSettings();
+    const neededDrawElementsCount = settings["drawelementscallsforboard"]; // Entire update seems to take several updates
     gl._drawElementsCount = 0;
     gl.drawElements = function(mode, count, type, offset)
     {
