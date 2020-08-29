@@ -84,7 +84,10 @@ function showBoardInDialog(board)
 
 function showFenInDialog(fen)
 {
-    document.getElementById("layoutfendiv").textContent = "FEN: " + fen;
+    let url = `https://lichess.org/editor/${fen}`;
+    document.getElementById("layoutfendiv").innerHTML = `
+        FEN: ${fen}<br>
+        <a href="${url}" target="_blank">${url}</a>`;
 }
 
 function status(msg)
